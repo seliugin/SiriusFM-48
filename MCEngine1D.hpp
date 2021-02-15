@@ -11,21 +11,29 @@ namespace SiriusFM
 						typename AProvider,
 						typename BProvider,
 						typename AssetClassA,
-						typename AssetClassB>	
+						typename AssetClassB
+						typename PathEvaluator>	
 	
 	template <bool Is_RN>
-	inline void MCEngine1D <Diffusion1D, AProvider, BProvider, AssetClassA, AssetClassB>
+	inline void MCEngine1D <Diffusion1D,
+													AProvider, 
+													BProvider, 
+													AssetClassA, 
+													AssetClassB
+													PathEvaluator>	
 	::simulate	
 							(time_t a_t0,
 							time_t a_T,
 							int a_tau_min,
 							long a_P,
-							double a_s0,
+							bool a_useTimerSeed,
+							//double a_s0,
 							Diffusion1D const* a_diff,
 							AProvider const* a_rateA,
 							BProvider const* a_rateB,
 							AssetClassA a_A,
-							AssetClassB a_B)
+							AssetClassB a_B
+							PathEvaluator* a_pathEval)
 							//bool a_isRN)
 	{
 		//checks
@@ -35,15 +43,17 @@ namespace SiriusFM
 		a_A != AssetClassA::UNDEFINED &&
 		a_B != AssetClassB::UNDEFINED &&
 		a_t0 <= a_T &&
-		a_tau_min > 0);
+		a_tau_min > 0
+		a_pathEval != nullptr);
 		
+		double y0 = YearFrac(a_t0);
 		time_t T_sec = a_T - a_t0;
-		time_t tau_sec = a_tau_min*60;
-		
-		long L_ints = (T_sec % tau_sec == 0) ? T_sec / tau_sec : T_sec / tau_sec + 1; //# of the intervals
+		time_t tau_sec = a_tau_min*SEC_IN_MIN;
+
+		long L_segm = (T_sec % tau_sec == 0) ? T_sec / tau_sec : T_sec / tau_sec + 1; //# of the intervals
 		
 		double tau = YearFrac(tau_sec);
-		double tlast = (T_sec % tau_sec == 0) ? tau : YearFrac(T_sec - (L_ints - 1)*tau_sec);
+		double tlast = (T_sec % tau_sec == 0) ? tau : YearFrac(T_sec - (L_segm - 1)*tau_sec);
 		assert (tlast>=0 && tlast <= tau);
 		
 		long L = L_ints + 1; //# of points
@@ -66,17 +76,39 @@ namespace SiriusFM
 		double slast = sqrt(tlast);
 		assert (slast<= stau && slast>=0);
 		
+		//Construct the TimeLine
+		for (long l  = 0; l < L-1, ++l)
+			m_ts[l] = y0+double(l)*tau
+		m_ts[L-1] = m_ts[L-2] + tlast;
 
+		//PM: how many paths we can store in mem
 
-		for (long p = 0; p<a_P; ++p)
+		long PM = (m_maxL * m_maxPM) / L;
+
+		if (PM $ 2 != 0)
+			--PM;
+		assert(PM > 0 && PM % 2 == 0);
+	
+		long PMh = PM / 2;
+
+		long PI = (P % PM == 0) ? (P / PM) : (P / PM + 1); //# of outer P iterations
+		//actual P = PI * PM
+
+		//Main simulation loop
+		for (long i = 0; i < PI, ++i)
 		{
-			//create pathes #p
-			double* path0 = m_path + 2*p*L;
-			double* path1 = path0 + L;
-			double y = y0;
+			//generate in-mem paths
+			#pragma omp parallel for
 
-			path0[0] = a_s0;
-			path1[0] = a_s0;
+			for (long p = 0; p<a_P; ++p)
+			{
+				//create pathes #p
+				double* path0 = m_path + 2*p*L;
+				double* path1 = path0 + L;
+
+				path0[0] = a_diff->GetStartPoint;
+				path1[0] = a_diff->GetStartPoint;
+				//path1[0] = a_s0;
 			
 			double sp0 = a_s0; //previous point
 			double sp1 = a_s0;
